@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Video Poker Logic Tests</title>
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: monospace;
+            margin: 0;
+            padding: 0;
+            background: #1a1a2e;
+            color: #eee;
+        }
+
+        /* ── Header bar ── */
+        #test-header {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: #16213e;
+            border-bottom: 2px solid #0f3460;
+            padding: 14px 24px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        #test-header-row {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        #test-header h1 {
+            margin: 0;
+            font-size: 1.15rem;
+            font-weight: bold;
+            color: #2dd4bf;
+            letter-spacing: 0.03em;
+            flex: 1;
+        }
+
+        #status-badge {
+            font-size: 0.8rem;
+            font-weight: bold;
+            padding: 4px 12px;
+            border-radius: 20px;
+            white-space: nowrap;
+        }
+
+        #status-badge.running {
+            background: #1e3a5f;
+            color: #60a5fa;
+            border: 1px solid #3b82f6;
+            animation: pulse 1.2s ease-in-out infinite;
+        }
+
+        #status-badge.pass {
+            background: #14532d;
+            color: #4ade80;
+            border: 1px solid #22c55e;
+        }
+
+        #status-badge.fail {
+            background: #450a0a;
+            color: #f87171;
+            border: 1px solid #ef4444;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.55;
+            }
+        }
+
+        #progress-bar-wrap {
+            height: 3px;
+            background: #0f3460;
+            margin: 0 -24px;
+        }
+
+        #progress-bar {
+            height: 100%;
+            background: #2dd4bf;
+            width: 0%;
+            transition: width 0.15s ease;
+        }
+
+        /* ── Suite results ── */
+        #output {
+            padding: 20px 24px;
+        }
+
+        .suite {
+            margin: 14px 0;
+        }
+
+        .suite-name {
+            font-size: 1rem;
+            font-weight: bold;
+            color: #fbbf24;
+            margin-bottom: 4px;
+        }
+
+        .pass {
+            color: #4ade80;
+        }
+
+        .fail {
+            color: #f87171;
+            font-weight: bold;
+        }
+
+        .summary {
+            margin-top: 20px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            border-top: 1px solid #333;
+            padding-top: 12px;
+        }
+
+        pre {
+            margin: 0;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Minimal DOM stubs required by app.js init -->
+    <div id="handSlots" hidden></div>
+    <button id="solveBtn" hidden></button>
+    <button id="clearHandBtn" hidden></button>
+    <button id="randomHandBtn" hidden></button>
+    <p id="solveStatus" hidden></p>
+    <div id="result" hidden></div>
+    <tbody id="paytable" hidden></tbody>
+    <div id="cheatSheet" hidden></div>
+    <tbody id="advancedCheatSheet" hidden></tbody>
+    <details id="cheatSheetBox" hidden>
+        <summary></summary>
+    </details>
+    <details id="advancedCheatSheetBox" hidden>
+        <summary></summary>
+    </details>
+    <button id="strategyBasicBtn" class="toggle-btn active" hidden></button>
+    <button id="strategyAdvancedBtn" class="toggle-btn" hidden></button>
+    <button id="applyPaytableBtn" hidden></button>
+    <div id="inlinePicker" hidden></div>
+    <div id="suitButtons" hidden></div>
+    <div id="rankButtons" hidden></div>
+    <p id="dialogError" hidden></p>
+    <button id="removeCardBtn" hidden></button>
+
+    <div id="test-header">
+        <div id="test-header-row">
+            <h1>&#9830; Video Poker — Logic Tests</h1>
+            <span id="status-badge" class="running">Running…</span>
+        </div>
+        <div id="progress-bar-wrap">
+            <div id="progress-bar"></div>
+        </div>
+    </div>
+
+    <div id="output"></div>
+
+    <script src="app.js"></script>
+    <script>
+        // ─── Mini test runner ───────────────────────────────────────────────────────
+        const results = { pass: 0, fail: 0, suites: [] };
+        let currentSuite = null;
+        const pendingSuites = [];   // suites are queued here, not run immediately
+
+        function escHtml(str) {
+            return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        function suite(name, fn) {
+            pendingSuites.push({ name, fn });
+        }
+
+        function test(desc, fn) {
+            currentSuite.pending.push({ desc, fn });
+        }
+
+        function assert(cond, msg) {
+            if (!cond) throw new Error(msg || "Assertion failed");
+        }
+
+        function assertEqual(a, b, msg) {
+            if (a !== b) throw new Error(msg || `Expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`);
+        }
+
+        // Tight tolerance for exact holds (no draws), looser for draw EV accumulation
+        function assertClose(a, b, tol = 1e-6, msg) {
+            if (Math.abs(a - b) > tol) throw new Error(msg || `Expected ~${b}, got ${a} (diff ${Math.abs(a - b)})`);
+        }
+
+        // ─── Paytable constants ─────────────────────────────────────────────────────
+        const S = (r, s) => ({ rank: r, suit: s });
+        const STANDARD = { royal_flush: 800, straight_flush: 50, four_kind: 25, full_house: 9, flush: 6, straight: 4, three_kind: 3, two_pair: 2, jacks_or_better: 1 };
+        const PAIR_ONLY = { royal_flush: 0, straight_flush: 0, four_kind: 0, full_house: 0, flush: 0, straight: 0, three_kind: 0, two_pair: 0, jacks_or_better: 100 };
+        const ALL_ZERO = { royal_flush: 0, straight_flush: 0, four_kind: 0, full_house: 0, flush: 0, straight: 0, three_kind: 0, two_pair: 0, jacks_or_better: 0 };
+        const ALL_NEG = { royal_flush: -10, straight_flush: -5, four_kind: -3, full_house: -2, flush: -2, straight: -1, three_kind: -1, two_pair: -1, jacks_or_better: -1 };
+
+        // ─── classifyHand ───────────────────────────────────────────────────────────
+        suite("classifyHand", () => {
+            test("royal flush", () => assertEqual(classifyHand([S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")]), "royal_flush"));
+            test("straight flush", () => assertEqual(classifyHand([S(9, "S"), S(8, "S"), S(7, "S"), S(6, "S"), S(5, "S")]), "straight_flush"));
+            test("four of a kind", () => assertEqual(classifyHand([S(9, "S"), S(9, "H"), S(9, "D"), S(9, "C"), S(2, "S")]), "four_kind"));
+            test("full house", () => assertEqual(classifyHand([S(10, "S"), S(10, "H"), S(10, "D"), S(3, "C"), S(3, "S")]), "full_house"));
+            test("flush", () => assertEqual(classifyHand([S(14, "S"), S(11, "S"), S(8, "S"), S(5, "S"), S(2, "S")]), "flush"));
+            test("straight 5-9", () => assertEqual(classifyHand([S(9, "S"), S(8, "H"), S(7, "D"), S(6, "C"), S(5, "S")]), "straight"));
+            test("wheel straight A-2-3-4-5", () => assertEqual(classifyHand([S(14, "S"), S(2, "H"), S(3, "D"), S(4, "C"), S(5, "S")]), "straight"));
+            test("three of a kind", () => assertEqual(classifyHand([S(7, "S"), S(7, "H"), S(7, "D"), S(13, "C"), S(2, "S")]), "three_kind"));
+            test("two pair high (JJ44)", () => assertEqual(classifyHand([S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")]), "two_pair"));
+            test("two pair low (2233)", () => assertEqual(classifyHand([S(2, "S"), S(2, "H"), S(3, "D"), S(3, "C"), S(7, "S")]), "two_pair"));
+            test("jacks or better (JJ)", () => assertEqual(classifyHand([S(11, "S"), S(11, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), "jacks_or_better"));
+            test("jacks or better (QQ)", () => assertEqual(classifyHand([S(12, "S"), S(12, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), "jacks_or_better"));
+            test("jacks or better (KK)", () => assertEqual(classifyHand([S(13, "S"), S(13, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), "jacks_or_better"));
+            test("jacks or better (AA)", () => assertEqual(classifyHand([S(14, "S"), S(14, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), "jacks_or_better"));
+            test("low pair (TT) = nothing", () => assertEqual(classifyHand([S(10, "S"), S(10, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), "nothing"));
+            test("low pair (99) = nothing", () => assertEqual(classifyHand([S(9, "S"), S(9, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), "nothing"));
+            test("garbage", () => assertEqual(classifyHand([S(14, "S"), S(11, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), "nothing"));
+        });
+
+        // ─── findBestHold — standard paytable ───────────────────────────────────────
+        suite("findBestHold — standard paytable", () => {
+            test("hold royal flush (mask=31)", () => {
+                const h = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")];
+                assertEqual(findBestHold(h, STANDARD).mask, 31);
+            });
+            test("hold 4-to-royal over high pair (off-suit kicker)", () => {
+                // As Ks Qs Js 2c — kicker is clubs so no flush/straight confusion
+                const h = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(2, "C")];
+                assertEqual(findBestHold(h, STANDARD).mask, 15, "hold first 4 cards (mask=15)");
+            });
+            test("hold full house (mask=31)", () => {
+                const h = [S(10, "S"), S(10, "H"), S(10, "D"), S(3, "C"), S(3, "S")];
+                assertEqual(findBestHold(h, STANDARD).mask, 31);
+            });
+            test("EV=0 with all-zero paytable", () => {
+                const h = [S(2, "C"), S(4, "H"), S(6, "S"), S(8, "D"), S(10, "H")];
+                assertClose(findBestHold(h, ALL_ZERO).ev, 0, 1e-9);
+            });
+        });
+
+        // ─── findBestHold — pair-only paytable ─────────────────────────────────────
+        suite("findBestHold — pair-only paytable (JoB=100, rest=0)", () => {
+            test("JJ+: hold all 5 beats drawing (off-suit kickers)", () => {
+                // QQ + off-suit low kickers — no royal draw possible
+                const h = [S(12, "S"), S(12, "H"), S(7, "D"), S(3, "C"), S(2, "D")];
+                assertEqual(findBestHold(h, PAIR_ONLY).mask, 31, "hold all 5 for guaranteed JoB");
+            });
+            test("JJ+ as pair: EV = 100", () => {
+                const h = [S(11, "S"), S(11, "H"), S(8, "D"), S(5, "C"), S(2, "S")];
+                assertClose(findBestHold(h, PAIR_ONLY).ev, 100, 1e-9);
+            });
+            test("low pair: drawing fresh beats holding 88", () => {
+                const cards = [S(8, "S"), S(8, "H"), S(3, "D"), S(5, "C"), S(2, "C")];
+                const holdPairEv = evaluateSpecificHold(cards, 3, PAIR_ONLY);
+                const drawAllEv = evaluateSpecificHold(cards, 0, PAIR_ONLY);
+                assert(drawAllEv > holdPairEv, `draw all (${drawAllEv.toFixed(5)}) should beat hold 88 (${holdPairEv.toFixed(5)})`);
+            });
+            test("JJ+ held as 5 cards maps to advanced row 6 (1 Pair JJ+)", () => {
+                const held = [S(11, "S"), S(11, "H"), S(8, "D"), S(5, "C"), S(2, "C")];
+                assertEqual(findAdvancedRowIndexForHeld(held, held), 6);
+            });
+        });
+
+        // ─── findBestHold — negative paytable ──────────────────────────────────────
+        suite("findBestHold — all-negative paytable", () => {
+            test("EV is non-positive for any hold", () => {
+                const h = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")];
+                const best = findBestHold(h, ALL_NEG);
+                assert(best.ev <= 0, `EV (${best.ev}) should be <= 0 with all-negative paytable`);
+            });
+            test("discard all (mask=0) has negative EV with all-negative paytable", () => {
+                const h = [S(2, "C"), S(4, "H"), S(6, "S"), S(8, "D"), S(10, "H")];
+                const ev = evaluateSpecificHold(h, 0, ALL_NEG);
+                assert(ev < 0, `discard-all EV (${ev}) should be < 0 — fresh draws still hit classified hands`);
+            });
+            test("solver never recommends holding a 5-card made hand with all-negative", () => {
+                // Royal flush held = -10; discard-all EV is slightly negative but > -10
+                const h = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")];
+                const best = findBestHold(h, ALL_NEG);
+                assert(best.mask !== 31, "should not hold all 5 with negative royal payout");
+            });
+        });
+
+        // ─── findBestHold — mixed positive/negative paytables ──────────────────────
+        // Two distinct mixed structures:
+        //   FH_NEG_2P_POS  — two_pair=2, full_house=-20, rest=0
+        //   TRIPS_NEG_HP_POS — jacks_or_better=5, three_kind=-5, rest=0
+        const FH_NEG_2P_POS = { royal_flush: 0, straight_flush: 0, four_kind: 0, full_house: -20, flush: 0, straight: 0, three_kind: 0, two_pair: 2, jacks_or_better: 0 };
+        const TRIPS_NEG_HP_POS = { royal_flush: 0, straight_flush: 0, four_kind: 0, full_house: 0, flush: 0, straight: 0, three_kind: -5, two_pair: 0, jacks_or_better: 5 };
+
+        suite("findBestHold — full_house negative, two_pair positive", () => {
+            test("hold all 5 (two pair) beats drawing 1 when full house is -20", () => {
+                // JJ44 2: hold all 5 = guaranteed +2; draw 1 can hit FH(-20)
+                const h = [S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")];
+                const evHoldAll = evaluateSpecificHold(h, 31, FH_NEG_2P_POS);
+                const evDraw1 = evaluateSpecificHold(h, 15, FH_NEG_2P_POS);
+                assert(evHoldAll > evDraw1, `hold all (${evHoldAll.toFixed(5)}) should beat draw-1 (${evDraw1.toFixed(5)})`);
+            });
+            test("findBestHold picks mask=31 (preserve two pair) when full house is -20", () => {
+                const h = [S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")];
+                assertEqual(findBestHold(h, FH_NEG_2P_POS).mask, 31);
+            });
+            test("hold all 5 (two pair) EV = 2 exactly", () => {
+                const h = [S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")];
+                assertClose(evaluateSpecificHold(h, 31, FH_NEG_2P_POS), 2, 1e-9);
+            });
+            test("draw-1 from two pair has EV < 2 because full house draws subtract", () => {
+                const h = [S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")];
+                assert(evaluateSpecificHold(h, 15, FH_NEG_2P_POS) < 2, "draw-1 risks -20 full house");
+            });
+        });
+
+        suite("findBestHold — three_kind negative, high_pair positive", () => {
+            test("hold all 5 (JoB) beats drawing 3 when trips is -5", () => {
+                // JJ 234 offsuit: hold all 5 = guaranteed JoB=5; drawing 3 risks trips(-5)
+                const h = [S(11, "S"), S(11, "H"), S(2, "D"), S(3, "C"), S(4, "S")];
+                const evHoldAll = evaluateSpecificHold(h, 31, TRIPS_NEG_HP_POS);
+                const evDraw3 = evaluateSpecificHold(h, 3, TRIPS_NEG_HP_POS);
+                assert(evHoldAll > evDraw3, `hold all (${evHoldAll.toFixed(5)}) should beat draw-3 (${evDraw3.toFixed(5)})`);
+            });
+            test("findBestHold picks mask=31 (preserve JoB) when trips is -5", () => {
+                const h = [S(11, "S"), S(11, "H"), S(2, "D"), S(3, "C"), S(4, "S")];
+                assertEqual(findBestHold(h, TRIPS_NEG_HP_POS).mask, 31);
+            });
+            test("hold all 5 (JoB) EV = 5 exactly", () => {
+                const h = [S(11, "S"), S(11, "H"), S(2, "D"), S(3, "C"), S(4, "S")];
+                assertClose(evaluateSpecificHold(h, 31, TRIPS_NEG_HP_POS), 5, 1e-9);
+            });
+            test("drawing into trips lowers EV below 5", () => {
+                // Trips EV from holding 3-of-a-kind hand and drawing 2
+                const h = [S(11, "S"), S(11, "H"), S(11, "D"), S(3, "C"), S(4, "S")];
+                // hold all 3 (mask=7), draw 2: some draws upgrade to FH(0) or quads(0),
+                // most keep trips(-5). Must be < 5.
+                assert(evaluateSpecificHold(h, 7, TRIPS_NEG_HP_POS) < 5, "trips draw EV should be < 5");
+            });
+            test("held 5-card trips (-5) is worse than guaranteed JoB (+5)", () => {
+                const trips = [S(11, "S"), S(11, "H"), S(11, "D"), S(3, "C"), S(4, "S")];
+                const job = [S(11, "S"), S(11, "H"), S(2, "D"), S(3, "C"), S(4, "S")];
+                assert(
+                    evaluateSpecificHold(trips, 31, TRIPS_NEG_HP_POS) < evaluateSpecificHold(job, 31, TRIPS_NEG_HP_POS),
+                    "5-card trips(-5) < 5-card JoB(+5)"
+                );
+            });
+        });
+
+        // ─── findBasicRowIndexForHeld ───────────────────────────────────────────────
+        suite("findBasicRowIndexForHeld", () => {
+            const bas = (held, full) => findBasicRowIndexForHeld(held, full || held);
+
+            // n=5 — every made hand must map to its STRATEGY_PATTERNS index
+            test("royal flush → 0", () => assertEqual(bas([S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")]), 0));
+            test("straight flush → 1", () => assertEqual(bas([S(9, "S"), S(8, "S"), S(7, "S"), S(6, "S"), S(5, "S")]), 1));
+            test("four of a kind → 2", () => assertEqual(bas([S(9, "S"), S(9, "H"), S(9, "D"), S(9, "C"), S(2, "S")]), 2));
+            test("full house → 4", () => assertEqual(bas([S(10, "S"), S(10, "H"), S(10, "D"), S(3, "C"), S(3, "S")]), 4));
+            test("flush → 5", () => assertEqual(bas([S(14, "S"), S(11, "S"), S(8, "S"), S(5, "S"), S(2, "S")]), 5));
+            test("straight → 6", () => assertEqual(bas([S(9, "S"), S(8, "H"), S(7, "D"), S(6, "C"), S(5, "S")]), 6));
+            test("three of a kind → 7", () => assertEqual(bas([S(7, "S"), S(7, "H"), S(7, "D"), S(13, "C"), S(2, "S")]), 7));
+            test("two pair → 9", () => assertEqual(bas([S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")]), 9));
+            test("jacks or better → 10", () => assertEqual(bas([S(11, "S"), S(11, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), 10));
+
+            // n=4 — draw patterns
+            test("4-to-royal → 3", () => {
+                const held = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S")];
+                assertEqual(bas(held, [...held, S(2, "D")]), 3);
+            });
+            test("4-to-SF → 8", () => {
+                const held = [S(9, "S"), S(8, "S"), S(7, "S"), S(5, "S")];
+                assertEqual(bas(held, [...held, S(2, "C")]), 8);
+            });
+            test("4-to-flush → 12", () => {
+                const held = [S(9, "S"), S(6, "S"), S(4, "S"), S(2, "S")];
+                assertEqual(bas(held, [...held, S(3, "C")]), 12);
+            });
+            test("4-to-open-straight → 14", () => {
+                const held = [S(6, "S"), S(7, "H"), S(8, "D"), S(9, "C")];
+                assertEqual(bas(held, [...held, S(2, "S")]), 14);
+            });
+            test("two pair (4 cards) → 9", () => {
+                const held = [S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C")];
+                assertEqual(bas(held, [...held, S(2, "S")]), 9);
+            });
+            test("n=4 trips + kicker (AAA+K) from quads hand → 7 (Three of a Kind) [regression]", () => {
+                // Holding 3 aces + kicker from AAAA+K — should still be Three of a Kind
+                const fullHand = [S(14, "S"), S(14, "H"), S(14, "D"), S(14, "C"), S(13, "S")];
+                const held = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "S")];
+                assertEqual(bas(held, fullHand), 7);
+            });
+            test("n=4 high pair + kickers (AA+KQ) from 3-ace hand → 10 (High Pair) [regression]", () => {
+                // Solver drops 3rd ace; held AA+KQ should map to High Pair
+                const fullHand = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")];
+                const held = [S(14, "S"), S(14, "H"), S(13, "C"), S(12, "S")];
+                assertEqual(bas(held, fullHand), 10);
+            });
+            test("n=4 low pair + kickers (88+KQ) from 3-of-a-kind hand → 13 (Low Pair) [regression]", () => {
+                const fullHand = [S(8, "S"), S(8, "H"), S(8, "D"), S(13, "C"), S(12, "S")];
+                const held = [S(8, "S"), S(8, "H"), S(13, "C"), S(12, "S")];
+                assertEqual(bas(held, fullHand), 13);
+            });
+            test("n=4 two pair from full house (AAKK from AAAKK) → 9 (Two Pair) [regression]", () => {
+                // Full house AAAKK — holding AAKK should be two pair
+                const fullHand = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(13, "S")];
+                const held = [S(14, "S"), S(14, "H"), S(13, "C"), S(13, "S")];
+                assertEqual(bas(held, fullHand), 9);
+            });
+
+            // n=3 — trips / 3-to-royal / 3-to-SF / pair+kicker
+            test("3 trips held (n=3) → 7", () => {
+                const held = [S(7, "S"), S(7, "H"), S(7, "D")];
+                assertEqual(bas(held, [...held, S(3, "C"), S(2, "S")]), 7);
+            });
+            test("n=3 trips held from a quads hand (AAA from AAAK) → 7 [regression]", () => {
+                const fullHand = [S(14, "S"), S(14, "H"), S(14, "D"), S(14, "C"), S(13, "S")];
+                const held = [S(14, "S"), S(14, "H"), S(14, "D")];
+                assertEqual(bas(held, fullHand), 7);
+            });
+            test("n=3 high pair + kicker (KK+J) → 10 (High Pair) [regression]", () => {
+                // KK+J held from JJJKK — kicker retained to avoid full house risk
+                const fullHand = [S(11, "S"), S(11, "H"), S(11, "D"), S(13, "C"), S(13, "S")];
+                const held = [S(13, "C"), S(13, "S"), S(11, "S")];
+                assertEqual(bas(held, fullHand), 10);
+            });
+            test("n=3 high pair + kicker (JJ+K) → 10 (High Pair)", () => {
+                const held = [S(11, "S"), S(11, "H"), S(13, "D")];
+                assertEqual(bas(held, [...held, S(5, "C"), S(2, "S")]), 10);
+            });
+            test("n=3 low pair + kicker (88+K) → 13 (Low Pair)", () => {
+                const held = [S(8, "S"), S(8, "H"), S(13, "D")];
+                assertEqual(bas(held, [...held, S(5, "C"), S(2, "S")]), 13);
+            });
+            test("n=3 pair+kicker doesn't override trips check (AAA → 7 not 10)", () => {
+                const held = [S(14, "S"), S(14, "H"), S(14, "D")];
+                assertEqual(bas(held, [...held, S(5, "C"), S(2, "S")]), 7);
+            });
+            test("n=3 pair+kicker doesn't override 3-to-royal (AKQ suited → 11 not 10)", () => {
+                // AA♠K wouldn't be suited but AKQ all spades has no pair — just verifying priority
+                const held = [S(14, "S"), S(13, "S"), S(12, "S")];
+                assertEqual(bas(held, [...held, S(5, "C"), S(2, "D")]), 11);
+            });
+            test("3-to-royal AKQ suited (n=3) → 11", () => {
+                const held = [S(14, "S"), S(13, "S"), S(12, "S")];
+                assertEqual(bas(held, [...held, S(5, "C"), S(2, "D")]), 11);
+            });
+            test("3-to-SF gapless 789 suited (n=3) → 16", () => {
+                const held = [S(7, "S"), S(8, "S"), S(9, "S")];
+                assertEqual(bas(held, [...held, S(2, "D"), S(4, "C")]), 16);
+            });
+
+            // n=2 — pair / suited / unsuited high
+            test("high pair JJ → 10", () => {
+                const held = [S(11, "S"), S(11, "H")];
+                assertEqual(bas(held, [...held, S(8, "D"), S(5, "C"), S(2, "S")]), 10);
+            });
+            test("n=2 high pair AA held from 3-ace hand → 10 (High Pair) [regression]", () => {
+                const fullHand = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")];
+                const held = [S(14, "S"), S(14, "H")];
+                assertEqual(bas(held, fullHand), 10);
+            });
+            test("n=2 high pair JJ held from trips JJJ hand → 10 (High Pair) [regression]", () => {
+                const fullHand = [S(11, "S"), S(11, "H"), S(11, "D"), S(8, "C"), S(5, "S")];
+                const held = [S(11, "S"), S(11, "H")];
+                assertEqual(bas(held, fullHand), 10);
+            });
+            test("low pair 88 → 13", () => {
+                const held = [S(8, "S"), S(8, "H")];
+                assertEqual(bas(held, [...held, S(13, "D"), S(5, "C"), S(2, "S")]), 13);
+            });
+            test("n=2 low pair 88 held from trips 888 hand → 13 (Low Pair) [regression]", () => {
+                const fullHand = [S(8, "S"), S(8, "H"), S(8, "D"), S(13, "C"), S(5, "S")];
+                const held = [S(8, "S"), S(8, "H")];
+                assertEqual(bas(held, fullHand), 13);
+            });
+            test("2 suited high cards (JQ suited) → 15", () => {
+                const held = [S(11, "S"), S(12, "S")];
+                assertEqual(bas(held, [...held, S(7, "D"), S(4, "C"), S(2, "H")]), 15);
+            });
+            test("suited 10/J → 18", () => {
+                const held = [S(10, "S"), S(11, "S")];
+                assertEqual(bas(held, [...held, S(7, "D"), S(4, "C"), S(2, "H")]), 18);
+            });
+            test("2 unsuited high cards (JQ off-suit) → 17", () => {
+                const held = [S(11, "S"), S(12, "H")];
+                assertEqual(bas(held, [...held, S(7, "D"), S(4, "C"), S(2, "D")]), 17);
+            });
+
+            // n=1 and n=0
+            test("single high card (A) → 19", () => assertEqual(bas([S(14, "S")], [S(14, "S"), S(9, "H"), S(7, "D"), S(4, "C"), S(2, "S")]), 19));
+            test("discard all → 20", () => assertEqual(bas([]), 20));
+        });
+
+        // ─── Cheat sheet row ordering — mixed paytables ─────────────────────────────
+        suite("Cheat sheet EV ordering — two_pair+, full_house–", () => {
+            // FH_NEG_2P_POS defined in scope above
+            test("Two Pair row ranks above Three of a Kind row", () => {
+                Object.assign(paytable, FH_NEG_2P_POS);
+                ensureTunedStrategyOrder(true);
+                const tp = tunedStrategyOrder.findIndex(r => r.label === "Two Pair");
+                const tok = tunedStrategyOrder.findIndex(r => r.label === "Three of a Kind");
+                assert(tp !== -1 && tok !== -1, "both rows must exist");
+                assert(tp < tok, `Two Pair (rank ${tp + 1}) should beat Three of a Kind (rank ${tok + 1}) when FH is -20`);
+            });
+            test("Full House row has EV = -20", () => {
+                Object.assign(paytable, FH_NEG_2P_POS);
+                ensureTunedStrategyOrder(true);
+                const fh = tunedStrategyOrder.find(r => r.label === "Full House");
+                assert(fh, "Full House row must exist");
+                assertClose(fh.ev, -20, 1e-9);
+            });
+            test("Two Pair row EV = 2 (guaranteed hold-all-5)", () => {
+                Object.assign(paytable, FH_NEG_2P_POS);
+                ensureTunedStrategyOrder(true);
+                const tp = tunedStrategyOrder.find(r => r.label === "Two Pair");
+                assertClose(tp.ev, 2, 1e-6);
+            });
+            test("findBasicRowIndexForHeld maps 5-card two pair to row 9 (Two Pair pattern)", () => {
+                const h = [S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")];
+                assertEqual(findBasicRowIndexForHeld(h, h), 9);
+            });
+            test("findAdvancedRowIndexForHeld maps 5-card two pair to row 2 (2 Pair)", () => {
+                const h = [S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")];
+                assertEqual(findAdvancedRowIndexForHeld(h, h), 2);
+            });
+        });
+
+        suite("Cheat sheet EV ordering — high_pair+, three_kind–", () => {
+            // TRIPS_NEG_HP_POS defined in scope above
+            test("High Pair row ranks above Three of a Kind row", () => {
+                Object.assign(paytable, TRIPS_NEG_HP_POS);
+                ensureTunedStrategyOrder(true);
+                const hp = tunedStrategyOrder.findIndex(r => r.label === "High Pair");
+                const tok = tunedStrategyOrder.findIndex(r => r.label === "Three of a Kind");
+                assert(hp !== -1 && tok !== -1, "both rows must exist");
+                assert(hp < tok, `High Pair (rank ${hp + 1}) should beat Three of a Kind (rank ${tok + 1}) when trips is -5`);
+            });
+            test("Three of a Kind row EV < 0", () => {
+                Object.assign(paytable, TRIPS_NEG_HP_POS);
+                ensureTunedStrategyOrder(true);
+                const tok = tunedStrategyOrder.find(r => r.label === "Three of a Kind");
+                assert(tok.ev < 0, `Three of a Kind EV (${tok.ev.toFixed(5)}) should be negative`);
+            });
+            test("High Pair row EV = 5 (hold-all-5 exception wins)", () => {
+                Object.assign(paytable, TRIPS_NEG_HP_POS);
+                ensureTunedStrategyOrder(true);
+                const hp = tunedStrategyOrder.find(r => r.label === "High Pair");
+                assertClose(hp.ev, 5, 1e-6);
+            });
+            test("findBasicRowIndexForHeld maps 5-card trips to row 7 (Three of a Kind pattern)", () => {
+                const h = [S(7, "S"), S(7, "H"), S(7, "D"), S(13, "C"), S(2, "S")];
+                assertEqual(findBasicRowIndexForHeld(h, h), 7);
+            });
+            test("findAdvancedRowIndexForHeld maps 5-card trips to row 1 (3 of a Kind)", () => {
+                const h = [S(7, "S"), S(7, "H"), S(7, "D"), S(13, "C"), S(2, "S")];
+                assertEqual(findAdvancedRowIndexForHeld(h, h), 1);
+            });
+        });
+
+        // ─── findAdvancedRowIndexForHeld ────────────────────────────────────────────
+        suite("findAdvancedRowIndexForHeld", () => {
+            const adv = (held, full) => findAdvancedRowIndexForHeld(held, full || held);
+
+            // n=5
+            test("5-card royal flush → row 0", () => assertEqual(adv([S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")]), 0));
+            test("5-card straight flush → row 0", () => assertEqual(adv([S(9, "S"), S(8, "S"), S(7, "S"), S(6, "S"), S(5, "S")]), 0));
+            test("5-card flush → row 0", () => assertEqual(adv([S(14, "S"), S(11, "S"), S(8, "S"), S(5, "S"), S(2, "S")]), 0));
+            test("5-card straight → row 0", () => assertEqual(adv([S(9, "S"), S(8, "H"), S(7, "D"), S(6, "C"), S(5, "S")]), 0));
+            test("5-card full house → row 0", () => assertEqual(adv([S(10, "S"), S(10, "H"), S(10, "D"), S(3, "C"), S(3, "S")]), 0));
+            test("5-card trips → row 1", () => assertEqual(adv([S(7, "S"), S(7, "H"), S(7, "D"), S(13, "C"), S(2, "S")]), 1));
+            test("5-card two pair → row 2", () => assertEqual(adv([S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")]), 2));
+            test("5-card JoB (JJ) → row 6", () => assertEqual(adv([S(11, "S"), S(11, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), 6));
+            test("5-card JoB (AA) → row 6", () => assertEqual(adv([S(14, "S"), S(14, "H"), S(8, "D"), S(5, "C"), S(2, "S")]), 6));
+
+            // n=4
+            test("4-to-royal → row 3", () => {
+                const held = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S")];
+                assertEqual(adv(held, [...held, S(2, "D")]), 3);
+            });
+            test("4-to-straight-flush → row 4", () => {
+                const held = [S(9, "S"), S(8, "S"), S(7, "S"), S(5, "S")];
+                assertEqual(adv(held, [...held, S(2, "C")]), 4);
+            });
+            test("4-to-flush (non-royal) → row 5", () => {
+                const held = [S(9, "S"), S(6, "S"), S(4, "S"), S(2, "S")];
+                assertEqual(adv(held, [...held, S(3, "C")]), 5);
+            });
+            test("4-to-open-straight 6789 → row 7", () => {
+                const held = [S(6, "S"), S(7, "H"), S(8, "D"), S(9, "C")];
+                assertEqual(adv(held, [...held, S(2, "S")]), 7);
+            });
+            test("n=4 held high pair + kickers (AA+QJ) → row 6 (1 Pair JJ+)", () => {
+                // Regression: e.g. A♣A♠Q♠J♠ from a trips hand — should map to 1 Pair, not -1
+                const held = [S(14, "C"), S(14, "S"), S(12, "S"), S(11, "S")];
+                assertEqual(adv(held, [...held, S(14, "H")]), 6);
+            });
+            test("n=4 held low pair + kickers (88+52) → row 11 (1 Pair 22–99)", () => {
+                const held = [S(8, "S"), S(8, "H"), S(5, "D"), S(3, "C")];
+                assertEqual(adv(held, [...held, S(2, "S")]), 11);
+            });
+            test("n=4 trips + kicker (AAA+K) → row 1 (3 of a Kind) [regression: was -1]", () => {
+                // Dropping one ace from AAA+KQ — held AAA+K should classify as trips
+                const fullHand = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")];
+                const held = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C")];
+                assertEqual(adv(held, fullHand), 1);
+            });
+            test("n=4 high pair + 2 kickers from 3-ace hand (AA+KQ) → row 6 (1 Pair JJ+) [regression: was -1]", () => {
+                // Holding 2 aces from a 3-ace hand — should be 1 Pair JJ+
+                const fullHand = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")];
+                const held = [S(14, "S"), S(14, "H"), S(13, "C"), S(12, "S")];
+                assertEqual(adv(held, fullHand), 6);
+            });
+
+            // n=2 pairs
+            test("pair AA → row 6", () => { const h = [S(14, "S"), S(14, "H")]; assertEqual(adv(h, [...h, S(8, "D"), S(5, "C"), S(2, "S")]), 6); });
+            test("pair JJ → row 6", () => { const h = [S(11, "S"), S(11, "H")]; assertEqual(adv(h, [...h, S(8, "D"), S(5, "C"), S(2, "S")]), 6); });
+            test("pair TT → row 9", () => { const h = [S(10, "S"), S(10, "H")]; assertEqual(adv(h, [...h, S(8, "D"), S(5, "C"), S(2, "S")]), 9); });
+            test("pair 88 → row 11", () => { const h = [S(8, "S"), S(8, "H")]; assertEqual(adv(h, [...h, S(13, "D"), S(5, "C"), S(2, "S")]), 11); });
+
+            // n=2 suited broadway
+            test("suited JQ → row 17", () => { const h = [S(11, "S"), S(12, "S")]; assertEqual(adv(h, [...h, S(7, "D"), S(4, "C"), S(2, "H")]), 17); });
+            test("suited JK → row 17", () => { const h = [S(11, "S"), S(13, "S")]; assertEqual(adv(h, [...h, S(7, "D"), S(4, "C"), S(2, "H")]), 17); });
+            test("suited QA → row 20", () => { const h = [S(12, "S"), S(14, "S")]; assertEqual(adv(h, [...h, S(7, "D"), S(4, "C"), S(2, "H")]), 20); });
+            test("suited TJ → row 29", () => { const h = [S(10, "S"), S(11, "S")]; assertEqual(adv(h, [...h, S(7, "D"), S(4, "C"), S(2, "H")]), 29); });
+
+            // n=2 unsuited broadway
+            test("unsuited JQ → row 25", () => { const h = [S(11, "S"), S(12, "H")]; assertEqual(adv(h, [...h, S(7, "D"), S(4, "C"), S(2, "D")]), 25); });
+            test("unsuited JK → row 27", () => { const h = [S(11, "S"), S(13, "H")]; assertEqual(adv(h, [...h, S(7, "D"), S(4, "C"), S(2, "D")]), 27); });
+            test("unsuited QA → row 30", () => { const h = [S(12, "S"), S(14, "H")]; assertEqual(adv(h, [...h, S(7, "D"), S(4, "C"), S(2, "D")]), 30); });
+
+            // n=3 — trips / suited draws / pair+kicker
+            test("3 held trips (n=3) → row 1", () => {
+                const held = [S(7, "S"), S(7, "H"), S(7, "D")];
+                assertEqual(adv(held, [...held, S(3, "C"), S(2, "S")]), 1);
+            });
+            test("n=3 high pair + kicker KK+J (from JJJKK) → row 6 (1 Pair JJ+) [regression]", () => {
+                const fullHand = [S(11, "S"), S(11, "H"), S(11, "D"), S(13, "C"), S(13, "S")];
+                const held = [S(13, "C"), S(13, "S"), S(11, "S")];
+                assertEqual(adv(held, fullHand), 6);
+            });
+            test("n=3 high pair + kicker JJ+K → row 6 (1 Pair JJ+)", () => {
+                const held = [S(11, "S"), S(11, "H"), S(13, "D")];
+                assertEqual(adv(held, [...held, S(5, "C"), S(2, "S")]), 6);
+            });
+            test("n=3 low pair + kicker 88+K → row 11 (1 Pair 22–99)", () => {
+                const held = [S(8, "S"), S(8, "H"), S(13, "D")];
+                assertEqual(adv(held, [...held, S(5, "C"), S(2, "S")]), 11);
+            });
+            test("n=3 pair+kicker TT+K → row 9 (1 Pair TT)", () => {
+                const held = [S(10, "S"), S(10, "H"), S(13, "D")];
+                assertEqual(adv(held, [...held, S(5, "C"), S(2, "S")]), 9);
+            });
+            test("n=3 pair+kicker doesn't override trips (AAA → row 1 not row 6)", () => {
+                const held = [S(14, "S"), S(14, "H"), S(14, "D")];
+                assertEqual(adv(held, [...held, S(5, "C"), S(2, "S")]), 1);
+            });
+
+            // n=3 suited draws
+            test("3-to-royal TJQ → row 8", () => {
+                const held = [S(10, "S"), S(11, "S"), S(12, "S")];
+                assertEqual(adv(held, [...held, S(7, "D"), S(4, "C")]), 8);
+            });
+            test("3-to-royal JQK → row 8", () => {
+                const held = [S(11, "S"), S(12, "S"), S(13, "S")];
+                assertEqual(adv(held, [...held, S(7, "D"), S(4, "C")]), 8);
+            });
+            test("3-to-royal JKA → row 10", () => {
+                const held = [S(11, "S"), S(13, "S"), S(14, "S")];
+                assertEqual(adv(held, [...held, S(7, "D"), S(4, "C")]), 10);
+            });
+            test("3-to-SF gapless 789 → row 13", () => {
+                const held = [S(7, "S"), S(8, "S"), S(9, "S")];
+                assertEqual(adv(held, [...held, S(3, "D"), S(2, "C")]), 13);
+            });
+
+            // n=1
+            test("single high card (A) → row 31", () => {
+                assertEqual(adv([S(14, "S")], [S(14, "S"), S(9, "H"), S(7, "D"), S(4, "C"), S(2, "S")]), 31);
+            });
+            test("single high card (J) → row 31", () => {
+                assertEqual(adv([S(11, "S")], [S(11, "S"), S(9, "H"), S(7, "D"), S(4, "C"), S(2, "S")]), 31);
+            });
+
+            // n=0
+            test("discard all → row 34 (Garbage)", () => assertEqual(adv([]), 34));
+        });
+
+        // ─── EV ordering with pair-only paytable ───────────────────────────────────
+        suite("Cheat sheet EV ordering — pair-only paytable", () => {
+            test("High Pair sorts to top", () => {
+                Object.assign(paytable, PAIR_ONLY);
+                ensureTunedStrategyOrder(true);
+                assertEqual(tunedStrategyOrder[0].label, "High Pair");
+            });
+            test("High Pair tuned EV = 100", () => {
+                Object.assign(paytable, PAIR_ONLY);
+                ensureTunedStrategyOrder(true);
+                assertClose(tunedStrategyOrder[0].ev, 100, 1e-9);
+            });
+            test("High Pair EV > Discard Everything EV", () => {
+                Object.assign(paytable, PAIR_ONLY);
+                ensureTunedStrategyOrder(true);
+                const highPair = tunedStrategyOrder.find(r => r.label === "High Pair");
+                const discard = tunedStrategyOrder.find(r => r.label === "Discard Everything");
+                assert(highPair && discard, "both rows must exist");
+                assert(highPair.ev > discard.ev, `High Pair (${highPair.ev.toFixed(5)}) should exceed Discard (${discard.ev.toFixed(5)})`);
+            });
+        });
+
+        // ─── Regression: 3-ace hand with high-pair-only paytable ───────────────────
+        // The original bug: solver correctly holds AA (drops 3rd ace for best EV) but
+        // the cheat sheet showed an "Exception" row instead of "1 Pair" / "High Pair".
+        const HP_ONLY = { royal_flush: 0, straight_flush: 0, four_kind: 0, full_house: 0, flush: 0, straight: 0, three_kind: 0, two_pair: 0, jacks_or_better: 1 };
+        suite("Regression — 3-ace hand with high-pair-only paytable (JoB=1, rest<=0)", () => {
+            test("solver picks hold-2-aces over hold-3-aces when trips has lower EV", () => {
+                const h = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")];
+                const evThree = evaluateSpecificHold(h, 7, HP_ONLY);   // mask=7 = first 3 cards (AAA)
+                const evTwo = evaluateSpecificHold(h, 3, HP_ONLY);   // mask=3 = first 2 cards (AA)
+                assert(evTwo > evThree, `hold-2 EV (${evTwo.toFixed(5)}) must beat hold-3 EV (${evThree.toFixed(5)})`);
+            });
+            test("findBasicRowIndexForHeld: held AA from 3-ace hand → 10 (High Pair)", () => {
+                const fullHand = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")];
+                const held = [S(14, "S"), S(14, "H")];
+                assertEqual(findBasicRowIndexForHeld(held, fullHand), 10);
+            });
+            test("findAdvancedRowIndexForHeld: held AA from 3-ace hand → row 6 (1 Pair JJ+)", () => {
+                const fullHand = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")];
+                const held = [S(14, "S"), S(14, "H")];
+                assertEqual(findAdvancedRowIndexForHeld(held, fullHand), 6);
+            });
+            test("getBasicSuggestionForCurrentHand labels it High Pair (not exception)", () => {
+                Object.assign(paytable, HP_ONLY);
+                ensureTunedStrategyOrder(true);
+                hand = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")];
+                const suggestion = getBasicSuggestionForCurrentHand();
+                assertEqual(suggestion.label, "High Pair", `Expected 'High Pair', got '${suggestion.label}'`);
+            });
+            test("getBasicSuggestionForCurrentHand best mask holds 4 cards (pair AA + 2 kickers)", () => {
+                // Drop the 3rd ace and hold AA+KQ: drawing 1 card is far less likely to
+                // land two-pair or trips (both pay 0) than drawing 3 from just AA.
+                Object.assign(paytable, HP_ONLY);
+                ensureTunedStrategyOrder(true);
+                hand = [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")];
+                const suggestion = getBasicSuggestionForCurrentHand();
+                const heldCount = [0, 1, 2, 3, 4].filter(i => (suggestion.mask >> i) & 1).length;
+                assertEqual(heldCount, 4, `Expected mask to hold 4 cards (AA+KQ), holds ${heldCount}`);
+            });
+        });
+
+        // ─── End-to-end: broken pat hands — full pipeline correctness ─────────────
+        //
+        // The fundamental question: for ANY paytable where the best hold is a structural
+        // subset of a "pat" hand (dropping one card to avoid a negatively-valued category),
+        // do BOTH cheat sheets classify the hold correctly WITHOUT triggering an exception?
+        //
+        // The approach is correct because classification is purely structure-based:
+        //   - Holding AA (from AAA+KQ)   → "High Pair"    regardless of original context
+        //   - Holding AAKK (from AAAKK)  → "Two Pair"     regardless of original context
+        //   - Holding AAA+K (from AAAA+K) → "Three of a Kind" regardless of original context
+        //
+        // An exception fires only when the MASK chosen by the solver differs from the MASK
+        // the chart's top-ranked row would suggest. After the structural classification fixes,
+        // both should always agree for these cases.
+        suite("End-to-end: broken pat hands — no cheat sheet exception", () => {
+            function checkNoException(handCards, tbl, expectedBasicLabel, msg) {
+                Object.assign(paytable, tbl);
+                hand = handCards;
+                ensureTunedStrategyOrder(true);
+                recomputeAdvancedCheatRowEvs();
+                const best = findBestHold(hand, paytable);
+                const eps = 1e-9;
+
+                // ── Basic chart ──────────────────────────────────────────────────
+                const basicSugg = getBasicSuggestionForCurrentHand();
+                const basicChoice = best.allChoices.find(c => c.mask === basicSugg.mask);
+                const basicEv = basicChoice ? basicChoice.ev : best.ev;
+                const isBasicExc = basicSugg.mask !== best.mask && (best.ev - basicEv) > eps;
+                assert(!isBasicExc,
+                    `${msg} [basic]: mask mismatch — solver mask ${best.mask} (EV ${best.ev.toFixed(5)}) vs chart mask ${basicSugg.mask} (EV ${basicEv.toFixed(5)}), gap ${(best.ev - basicEv).toFixed(7)}`);
+                if (expectedBasicLabel) {
+                    assertEqual(basicSugg.label, expectedBasicLabel,
+                        `${msg} [basic label]: expected '${expectedBasicLabel}', got '${basicSugg.label}'`);
+                }
+
+                // ── Advanced chart ───────────────────────────────────────────────
+                const advSugg = getAdvancedSuggestionForCurrentHand(best);
+                const chartSugg = advSugg ? (advSugg.chartSuggestion || advSugg) : null;
+                const chartMask = chartSugg ? chartSugg.mask : null;
+                const chartChoice = chartMask != null ? best.allChoices.find(c => c.mask === chartMask) : null;
+                const advEv = chartChoice ? chartChoice.ev : best.ev;
+                // Row-equality suppression: same as renderResult — not an exception when
+                // solver and chart agree on the row type (same sourceIndex), masks can differ.
+                const sameRow = advSugg && advSugg.chartSuggestion
+                    && advSugg.sourceIndex === advSugg.chartSuggestion.sourceIndex;
+                const isAdvExc = Boolean(chartSugg && chartSugg.mask !== best.mask && (best.ev - advEv) > eps && !sameRow);
+                assert(!isAdvExc,
+                    `${msg} [advanced]: mask mismatch — solver mask ${best.mask} (EV ${best.ev.toFixed(5)}) vs chart mask ${chartMask} (EV ${advEv.toFixed(5)}), gap ${(best.ev - advEv).toFixed(7)}`);
+            }
+
+            // Trips → break to High Pair (JoB=1, everything else=0)
+            const HP_ONLY_E2E = { royal_flush: 0, straight_flush: 0, four_kind: 0, full_house: 0, flush: 0, straight: 0, three_kind: 0, two_pair: 0, jacks_or_better: 1 };
+            test("AAA+KQ (HP_ONLY): breaks to High Pair hold, no exception", () => {
+                checkNoException(
+                    [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")],
+                    HP_ONLY_E2E, "High Pair", "AAA+KQ with HP_ONLY"
+                );
+            });
+            test("JJJ+KQ (HP_ONLY): breaks to High Pair hold, no exception", () => {
+                checkNoException(
+                    [S(11, "S"), S(11, "H"), S(11, "D"), S(13, "C"), S(12, "S")],
+                    HP_ONLY_E2E, "High Pair", "JJJ+KQ with HP_ONLY"
+                );
+            });
+
+            // Trips → break to High Pair (JoB positive, three_kind negative)
+            test("JJJ+KQ (TRIPS_NEG_HP_POS): breaks to High Pair hold, no exception", () => {
+                checkNoException(
+                    [S(11, "S"), S(11, "H"), S(11, "D"), S(13, "C"), S(12, "S")],
+                    TRIPS_NEG_HP_POS, "High Pair", "JJJ+KQ with TRIPS_NEG_HP_POS"
+                );
+            });
+            test("AAA+KQ (TRIPS_NEG_HP_POS): breaks to High Pair hold, no exception", () => {
+                checkNoException(
+                    [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(12, "S")],
+                    TRIPS_NEG_HP_POS, "High Pair", "AAA+KQ with TRIPS_NEG_HP_POS"
+                );
+            });
+
+            // Full House → break to Two Pair (two_pair positive, full_house negative)
+            test("AAAKK (FH_NEG_2P_POS): breaks to Two Pair hold, no exception", () => {
+                checkNoException(
+                    [S(14, "S"), S(14, "H"), S(14, "D"), S(13, "C"), S(13, "S")],
+                    FH_NEG_2P_POS, "Two Pair", "AAAKK with FH_NEG_2P_POS"
+                );
+            });
+            test("JJJKK (FH_NEG_2P_POS): breaks to Two Pair hold, no exception", () => {
+                checkNoException(
+                    [S(11, "S"), S(11, "H"), S(11, "D"), S(13, "C"), S(13, "S")],
+                    FH_NEG_2P_POS, "Two Pair", "JJJKK with FH_NEG_2P_POS"
+                );
+            });
+
+            // Full House → break to High Pair (full_house negative, JoB positive, two_pair=0)
+            const FH_NEG_HP_POS = { royal_flush: 0, straight_flush: 0, four_kind: 0, full_house: -10, flush: 0, straight: 0, three_kind: 0, two_pair: 0, jacks_or_better: 5 };
+            test("JJJKK (FH_NEG_HP_POS): breaks to High Pair hold, no exception", () => {
+                checkNoException(
+                    [S(11, "S"), S(11, "H"), S(11, "D"), S(13, "C"), S(13, "S")],
+                    FH_NEG_HP_POS, "High Pair", "JJJKK with FH_NEG_HP_POS"
+                );
+            });
+
+            // Quads → break to Trips (four_kind negative, three_kind positive)
+            const QUADS_NEG_TRIPS_POS = { royal_flush: 0, straight_flush: 0, four_kind: -10, full_house: 0, flush: 0, straight: 0, three_kind: 5, two_pair: 0, jacks_or_better: 0 };
+            test("AAAA+K (QUADS_NEG_TRIPS_POS): breaks to Three of a Kind hold, no exception", () => {
+                checkNoException(
+                    [S(14, "S"), S(14, "H"), S(14, "D"), S(14, "C"), S(13, "S")],
+                    QUADS_NEG_TRIPS_POS, "Three of a Kind", "AAAA+K with QUADS_NEG_TRIPS_POS"
+                );
+            });
+
+            // Same-row-different-mask: hold-all-5 with a pair ties with hold-2 draw.
+            // The chart recommends "1 Pair" either way — no exception should fire.
+            // Reproduces the J♠J♥9♠8♠7♠ / JoB=10, FH=10 screenshot bug.
+            const JOB_HIGH_FH_HIGH = { royal_flush: 25, straight_flush: 0, four_kind: 15, full_house: 10, flush: 8, straight: 5, three_kind: 3, two_pair: 2, jacks_or_better: 10 };
+            test("J♠J♥9♠8♠7♠ (JoB=10, FH=10): hold-all-5 ties hold-JJ; no exception (same row)", () => {
+                checkNoException(
+                    [S(11, "S"), S(11, "H"), S(9, "S"), S(8, "S"), S(7, "S")],
+                    JOB_HIGH_FH_HIGH, "High Pair", "JJ987 with JOB_HIGH_FH_HIGH"
+                );
+            });
+        });
+
+        // ─── findAdvancedRowIndexForHeldSplit ───────────────────────────────────────
+        suite("findAdvancedRowIndexForHeldSplit", () => {
+            // Enable split mode for these tests, restore afterwards.
+            let savedSplit;
+            function setupSplit() { savedSplit = splitPatHand; splitPatHand = true; }
+            function teardownSplit() { splitPatHand = savedSplit; }
+
+            test("n=5 royal flush → row 0", () => {
+                setupSplit();
+                const h = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 0);
+            });
+            test("n=5 straight flush → row 1", () => {
+                setupSplit();
+                const h = [S(9, "S"), S(8, "S"), S(7, "S"), S(6, "S"), S(5, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 1);
+            });
+            test("n=5 four of a kind → row 2", () => {
+                setupSplit();
+                const h = [S(9, "S"), S(9, "H"), S(9, "D"), S(9, "C"), S(2, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 2);
+            });
+            test("n=5 full house → row 3", () => {
+                setupSplit();
+                const h = [S(10, "S"), S(10, "H"), S(10, "D"), S(3, "C"), S(3, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 3);
+            });
+            test("n=5 flush → row 4", () => {
+                setupSplit();
+                const h = [S(14, "S"), S(11, "S"), S(8, "S"), S(5, "S"), S(2, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 4);
+            });
+            test("n=5 straight → row 5", () => {
+                setupSplit();
+                const h = [S(9, "S"), S(8, "H"), S(7, "D"), S(6, "C"), S(5, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 5);
+            });
+            test("n=5 JJ (jacks_or_better) → row 6+5=11 (1 Pair JJ+ in split)", () => {
+                setupSplit();
+                const h = [S(11, "S"), S(11, "H"), S(9, "D"), S(8, "C"), S(7, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 11); // base row 6 + 5
+            });
+            test("n=5 two pair → row 2+5=7 (2 Pair in split)", () => {
+                setupSplit();
+                const h = [S(11, "S"), S(11, "H"), S(4, "D"), S(4, "C"), S(2, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 7); // base row 2 + 5
+            });
+            test("n=5 three of a kind → row 1+5=6 (3 of a Kind in split)", () => {
+                setupSplit();
+                const h = [S(7, "S"), S(7, "H"), S(7, "D"), S(13, "C"), S(2, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 6); // base row 1 + 5
+            });
+            test("n=2 suited JQ → row 17+5=22 (2 to Royal JQ in split)", () => {
+                setupSplit();
+                const h = [S(11, "S"), S(12, "S")];
+                const r = findAdvancedRowIndexForHeldSplit(h);
+                teardownSplit();
+                assertEqual(r, 22); // base row 17 + 5
+            });
+
+            test("ADVANCED_CHEAT_ROWS has 35 entries", () => {
+                assertEqual(ADVANCED_CHEAT_ROWS.length, 35);
+            });
+            test("ADVANCED_CHEAT_ROWS_SPLIT has 40 entries (6 pat + 34 draw)", () => {
+                assertEqual(ADVANCED_CHEAT_ROWS_SPLIT.length, 40);
+            });
+            test("split row 0 is Royal Flush", () => {
+                assertEqual(ADVANCED_CHEAT_ROWS_SPLIT[0][0], "Royal Flush");
+            });
+            test("split row 5 is Straight", () => {
+                assertEqual(ADVANCED_CHEAT_ROWS_SPLIT[5][0], "Straight");
+            });
+            test("split row 6 matches combined row 1 (3 of a Kind)", () => {
+                assertEqual(ADVANCED_CHEAT_ROWS_SPLIT[6][0], ADVANCED_CHEAT_ROWS[1][0]);
+            });
+            test("split last row matches combined last row (Garbage)", () => {
+                assertEqual(
+                    ADVANCED_CHEAT_ROWS_SPLIT[ADVANCED_CHEAT_ROWS_SPLIT.length - 1][0],
+                    ADVANCED_CHEAT_ROWS[ADVANCED_CHEAT_ROWS.length - 1][0]
+                );
+            });
+        });
+
+        // ─── evaluateSpecificHold ───────────────────────────────────────────────────
+        suite("evaluateSpecificHold", () => {
+            test("hold royal flush = 800 (standard)", () => {
+                const h = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")];
+                assertClose(evaluateSpecificHold(h, 31, STANDARD), 800, 1e-9);
+            });
+            test("hold all-5 flush = 6 (standard)", () => {
+                const h = [S(14, "S"), S(11, "S"), S(8, "S"), S(5, "S"), S(2, "S")];
+                assertClose(evaluateSpecificHold(h, 31, STANDARD), 6, 1e-9);
+            });
+            test("discard all = 0 with zero paytable", () => {
+                const h = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")];
+                assertClose(evaluateSpecificHold(h, 0, ALL_ZERO), 0, 1e-9);
+            });
+            test("hold royal flush = -10 with all-negative paytable", () => {
+                const h = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")];
+                assertClose(evaluateSpecificHold(h, 31, ALL_NEG), -10, 1e-9);
+            });
+            test("hold JJ (mask=3) EV with standard paytable is positive", () => {
+                const h = [S(11, "S"), S(11, "H"), S(8, "D"), S(5, "C"), S(2, "S")];
+                assert(evaluateSpecificHold(h, 3, STANDARD) > 0, "holding JJ should have positive EV");
+            });
+        });
+
+        // ─── All-zero paytable — every hold is equivalent (EV = 0) ─────────────────
+        suite("All-zero paytable — every hold yields EV 0", () => {
+            // With all payouts at zero any hold decision is equally correct.
+            const oz = [S(14, "S"), S(13, "S"), S(12, "S"), S(11, "S"), S(10, "S")];
+            test("hold all 5 (royal) = 0", () =>
+                assertClose(evaluateSpecificHold(oz, 31, ALL_ZERO), 0, 1e-9));
+            test("hold 4 cards = 0", () =>
+                assertClose(evaluateSpecificHold(oz, 15, ALL_ZERO), 0, 1e-9));
+            test("hold 1 card = 0", () =>
+                assertClose(evaluateSpecificHold(oz, 1, ALL_ZERO), 0, 1e-9));
+            test("discard all (mask=0) = 0", () =>
+                assertClose(evaluateSpecificHold(oz, 0, ALL_ZERO), 0, 1e-9));
+        });
+
+        // ─── Async runner — yields between suites to avoid unresponsive-page warning ─
+        const out = document.getElementById("output");
+        const badge = document.getElementById("status-badge");
+        const progressBar = document.getElementById("progress-bar");
+        const total = pendingSuites.length;
+
+        function renderSuite(s) {
+            const div = document.createElement("div");
+            div.className = "suite";
+            div.innerHTML = `<div class="suite-name">${escHtml(s.name)}</div>` +
+                s.cases.map(c => c.ok
+                    ? `<pre class="pass">  ✓ ${escHtml(c.desc)}</pre>`
+                    : `<pre class="fail">  ✗ ${escHtml(c.desc)}: ${escHtml(c.msg)}</pre>`
+                ).join("");
+            out.appendChild(div);
+        }
+
+        async function runAll() {
+            const yield_ = () => new Promise(r => setTimeout(r, 0));
+
+            for (let i = 0; i < pendingSuites.length; i++) {
+                const { name, fn } = pendingSuites[i];
+                badge.textContent = `Running… (${i + 1} / ${total})`;
+
+                // Save global state before any test in this suite runs.
+                const saved = JSON.parse(JSON.stringify(paytable));
+                const savedHand = hand.map(c => c ? { ...c } : null);
+                tunedStrategyOrder = [];
+                currentSuite = { name, cases: [], pending: [] };
+                results.suites.push(currentSuite);
+
+                // Phase 1: collect tests (fn calls test(), which pushes to pending).
+                fn();
+
+                // Phase 2: run each test individually, yielding between them to keep
+                // the browser responsive during heavy findBestHold calls.
+                for (const { desc, fn: testFn } of currentSuite.pending) {
+                    try {
+                        testFn();
+                        currentSuite.cases.push({ desc, ok: true });
+                        results.pass++;
+                    } catch (e) {
+                        currentSuite.cases.push({ desc, ok: false, msg: e.message });
+                        results.fail++;
+                    }
+                    await yield_();
+                }
+
+                // Restore global state after all tests in the suite.
+                Object.assign(paytable, saved);
+                hand = savedHand;
+                tunedStrategyOrder = [];
+
+                renderSuite(currentSuite);
+                progressBar.style.width = `${((i + 1) / total) * 100}%`;
+            }
+
+            const allPass = results.fail === 0;
+            badge.textContent = allPass
+                ? `${results.pass} passed`
+                : `${results.pass} passed, ${results.fail} failed`;
+            badge.className = allPass ? "pass" : "fail";
+            progressBar.style.background = allPass ? "#2dd4bf" : "#ef4444";
+
+            const summary = document.createElement("div");
+            summary.className = "summary";
+            summary.innerHTML = `<span class="${allPass ? "pass" : "fail"}">${results.pass} passed, ${results.fail} failed</span>`;
+            out.appendChild(summary);
+        }
+
+        runAll();
+    </script>
+</body>
+
+</html>

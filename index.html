@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#2dd4bf">
+    <title>Video Poker Helper</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <main class="app">
+        <header class="hero">
+            <h1>Video Poker Helper</h1>
+            <p>Enter your five cards and get the best hold by expected value.</p>
+        </header>
+
+        <section class="panel hand-panel">
+            <div class="panel-head">
+                <h2>Current Hand</h2>
+                <div class="actions">
+                    <button id="randomHandBtn" class="btn btn-secondary" type="button">Random</button>
+                    <button id="clearHandBtn" class="btn btn-secondary" type="button">Clear</button>
+                </div>
+            </div>
+            <div id="handSlots" class="hand-slots" aria-label="Five card hand"></div>
+            <div id="inlinePicker" class="inline-picker" hidden>
+                <div id="suitButtons" class="inline-suit-row"></div>
+                <div id="rankButtons" class="inline-rank-row"></div>
+                <div class="inline-picker-footer">
+                    <p id="dialogError" class="error" aria-live="polite"></p>
+                    <button type="button" id="removeCardBtn" class="btn btn-secondary">Remove Card</button>
+                </div>
+            </div>
+            <button id="solveBtn" class="btn btn-primary" type="button">Find Best Hold</button>
+            <p id="solveStatus" class="status" aria-live="polite"></p>
+        </section>
+
+        <section class="panel">
+            <details class="paytable-details">
+                <summary>Payout Table (tap to expand)</summary>
+                <div class="paytable-wrap">
+                    <table class="paytable-table">
+                        <thead>
+                            <tr>
+                                <th>Hand</th>
+                                <th>Multiplier</th>
+                            </tr>
+                        </thead>
+                        <tbody id="paytable"></tbody>
+                    </table>
+                    <button id="applyPaytableBtn" class="btn btn-primary paytable-apply" type="button">Apply</button>
+                </div>
+            </details>
+        </section>
+
+        <section class="panel">
+            <div class="strategy-toggle" role="group" aria-label="Strategy recommendation mode">
+                <button id="strategyBasicBtn" class="btn btn-secondary toggle-btn active" type="button">Basic</button>
+                <button id="strategyAdvancedBtn" class="btn btn-secondary toggle-btn" type="button">Advanced</button>
+            </div>
+            <div id="result" class="result">
+                <p>Enter all 5 cards, then tap <strong>Find Best Hold</strong>.</p>
+            </div>
+            <details class="cheat-details" id="cheatSheetBox">
+                <summary>General Cheat Sheet</summary>
+                <div id="cheatSheet" class="cheat-sheet">
+                    <p>General strategy guidance loads here.</p>
+                </div>
+            </details>
+
+            <details class="cheat-details" id="advancedCheatSheetBox">
+                <summary>Advanced Cheat Sheet</summary>
+                <div class="advanced-cheat-controls">
+                    <button id="splitPatHandBtn" class="toggle-btn" type="button">Split Pat Hands</button>
+                </div>
+                <div class="advanced-cheat-wrap">
+                    <table class="advanced-cheat-table" aria-label="Advanced strategy variation list">
+                        <thead>
+                            <tr>
+                                <th>Rank</th>
+                                <th>Play Type</th>
+                                <th>Play Details</th>
+                                <th>Rep EV</th>
+                            </tr>
+                        </thead>
+                        <tbody id="advancedCheatSheet"></tbody>
+                    </table>
+                </div>
+            </details>
+        </section>
+    </main>
+
+
+
+    <script src="app.js"></script>
+    <script>
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.register("./sw.js");
+        }
+    </script>
+</body>
+
+</html>

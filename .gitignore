@@ -1,0 +1,12 @@
+# Dependencies / environments
+node_modules/
+.venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Local dev notes
+payout list.txt
+example payout/
